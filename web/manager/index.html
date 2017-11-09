@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="jquery.mobile-1.4.5.min.css" />
+    <link rel="stylesheet" href="alertify.core.css" />
+    <link rel="stylesheet" href="alertify.default.css" />
+
+    <script src="jquery-1.11.3.min.js"></script>
+    <script src="jquery.mobile-1.4.5.min.js"></script>
+    <script src="alertify.min.js"></script>
+
+    <style type="text/css">
+        div, a, p, h1, h2 {
+            -webkit-touch-callout: none;
+            -webkit-user-select: none; /* Disable selection/copy in UIWebView */
+        }
+
+        .ui-item-left {
+            float: left;
+            margin-left: 10px;
+            max-width: 70%;
+            overflow: hidden;
+        }
+
+        .ui-item-right {
+            float: right;
+            margin-right: 10px;
+        }
+
+        .ui-item-bubble {
+            float: left;
+            font-size: 16px;
+            font-weight: bold;
+            color: white;
+            background-color: darkorange;
+            border-radius: 12px;
+            width: 48px;
+            height: 24px;
+            margin-top: 10px;
+            margin-right: 20px;
+            line-height: 24px;
+            text-align: center;
+        }
+    </style>
+
+    <script type="text/javascript">
+
+        var settings = null;
+        var ports = null;
+
+        $(document).ready(function(){
+
+        });
+
+        $(document).on("pagecreate","#pageMain",function(){
+            $.ajax({
+                type: "GET",
+                url: "/sysinfo/version",
+                data: {
+                    "ts": new Date().getTime()
+                },
+                dataType: "json",
+                success: function(data) {
+                    var version = data["version"];
+                    $("#txtTitle").text("h5control service " + version);
+                }
+            });
+
+            $.ajax({
+                type: "GET",
+                url: "/settings/readAll",
+                data: {
+                    "ts": new Date().getTime()
+                },
+                dataType: "json",
+                success: function(data) {
+                    settings = data;
+                    showConnections();
+                    setupWebsocket();
+                }
+            });
+        });
+
+        $(document).on("pagecreate","#pageSettings",function(){
+            showSettings();
+            $("#btnResetSettings").on("tap", resetSettings );
+            $("#btnSaveSettings").on("tap", saveSettings );
+        });
+
+        $(document).on("pagecreate","#pageNewConnection",function(){
+            showPorts();
+            $("#selNewConnectionPortName").change(function() {
+                var optSelected = $(this).children("option:selected");
+                var vid = optSelected.attr("_vid");
+                var pid = optSelected.attr("_pid");
+
+                var txtVID = $("#txtNewConnectionVID");
+                var txtPID = $("#txtNewConnectionPID");
+                if (vid > 0) { txtVID.val(vid) } else { txtVID.val(""); }
+                if (pid > 0) { txtPID.val(pid) } else { txtPID.val(""); }
+            });
+            $("#btnAddNewConnection").on("tap", addNewConnection );
+
+        });
+
+        function setupWebsocket() {
+
+            function getUrlHost() {
+                var items = document.URL.split("/");
+                if (items.length>3 && (items[0]=="http:" || items[0]=="https:") && items[1]=="")
+                    return items[2].split(":")[0];
+                return "127.0.0.1";
+            }
+
+            var host = getUrlHost();
+            var port = settings["service"]["websocket-port"];
+
+            var txtStatus = $("#txtStatus");
+
+            if ("WebSocket" in window) {
+
+                var ws = new WebSocket("ws://"+host+":"+port+"/manager");
+
+                ws.onopen = function() {
+                    txtStatus.text("system is ready");
+                };
+
+                ws.onclose = function() {
+                    txtStatus.text("system connection lost");
+                };
+
+                ws.onmessage = function (evt) {
+
+                    var data = evt.data;
+                    var info = JSON.parse(data);
+
+                    if (info["event"] == "rioc-refresh-begin") {
+
+                        txtStatus.text("connecting ...");
+
+                        var m = settings["connections"].length;
+                        for (var n=0 ; n<m ; n++) {
+                            var txtConnectionBubble = $("#txtConnectionBubble" + n);
+                            txtConnectionBubble.text("0")
+                            txtConnectionBubble.hide();
+                        }
+
+                    } else if (info["event"] == "rioc-refresh-finish") {
+
+                        var count = info["count"];
+                        txtStatus.text(count + " devices connected" );
+
+                    } else if (info["event"] == "rioc-connect") {
+
+                        var index = info["index"];
+                        var port = info["port"];
+                        var done = info["done"];
+
+                        // popup message
+                        if (done) {
+                            popupMessage("Connected to " + port);
+                        } else {
+                            popupMessage("Error connecting to " + port);
+                        }
+
+                        // update connections list view
+                        if (done && index>=0 && index<settings["connections"].length) {
+                            var txtConnectionBubble = $("#txtConnectionBubble" + index);
+                            var val = parseInt(txtConnectionBubble.text()) + 1;
+                            txtConnectionBubble.text(val);
+                            txtConnectionBubble.show();
+                        }
+
+                    } else if (info["event"] == "restart") {
+
+                        setTimeout(function() {
+                            var httpPort = info["http-port"];
+                            document.location.href = "http://" + getUrlHost() + ":" + httpPort + "/manager/index.html";
+                        }, 2500);
+
+                        popupMessage("Restarting, please wait....");
+                    }
+                };
+            }
+        }
+
+        function popupMessage(msg) {
+
+            if (popupMessage.stackLevel == undefined) {
+                popupMessage.stackLevel = 0;
+            }
+
+            $("#txtPopup").text(msg);
+            $("#divPopup").popup("open", {"transition": "pop"});
+
+            popupMessage.stackLevel++;
+            setTimeout(function() {
+                popupMessage.stackLevel--;
+                if (popupMessage.stackLevel==0) {
+                    $("#divPopup").popup("close");
+                }
+            }, 3000);
+        }
+
+        function showSettings() {
+            $("#txtWebsocketPort").val(settings["service"]["websocket-port"]);
+            $("#txtHttpPort").val(settings["service"]["http-port"]);
+            $("#barMessagingInterval").val(settings["messaging-interval"]).slider("refresh");
+            $("#chkLoggerEnabled").prop("checked", settings["logger-enabled"]).checkboxradio("refresh");
+        }
+
+        function resetSettings() {
+            settings["service"]["websocket-port"] = 50000;
+            settings["service"]["http-port"]      = 58000;
+            settings["messaging-interval"]        = 20;
+            settings["logger-enabled"]            = 0;
+            showSettings();
+        }
+
+        function saveSettings() {
+
+            var websocketPort     = parseInt($("#txtWebsocketPort").val());
+            var httpPort          = parseInt($("#txtHttpPort").val());
+            var messagingInterval = $("#barMessagingInterval").val();
+            var isLoggerEnabled   = $("#chkLoggerEnabled").prop("checked") ? 1 : 0;
+
+            if (websocketPort<1 || websocketPort>65534 || httpPort<1 || httpPort>65534) {
+                alertify.alert("The port number you entered is invalid.");
+                return;
+            }
+
+            settings["service"]["websocket-port"] = websocketPort;
+            settings["service"]["http-port"]      = httpPort;
+            settings["messaging-interval"]        = messagingInterval;
+            settings["logger-enabled"]            = isLoggerEnabled;
+
+            alertify.confirm("Are you sure to save all settings?", function(ok) {
+
+                if (!ok) return;
+
+                var done = false;
+                $.ajax({
+                    type: "GET",
+                    url: "/settings/write",
+                    data: {
+                        "ts": new Date().getTime(),
+                        "key": "service",
+                        "json": JSON.stringify(settings["service"])
+                    },
+                    dataType: "json",
+                    async: false,
+                    success: function (data) { done = data["done"]; }
+                });
+
+                if (!done) return;
+                done = false;
+                $.ajax({
+                    type: "GET",
+                    url: "/settings/write",
+                    data: {
+                        "ts": new Date().getTime(),
+                        "key": "messaging-interval",
+                        "value": settings["messaging-interval"]
+                    },
+                    dataType: "json",
+                    async: false,
+                    success: function (data) { done = data["done"]; }
+                });
+
+                if (!done) return;
+                done = false;
+                $.ajax({
+                    type: "GET",
+                    url: "/settings/write",
+                    data: {
+                        "ts": new Date().getTime(),
+                        "key": "logger-enabled",
+                        "value": settings["logger-enabled"]
+                    },
+                    dataType: "json",
+                    async: false,
+                    success: function (data) { done = data["done"]; }
+                });
+
+                if (!done) return;
+                done = false;
+                $.ajax({
+                    type: "GET",
+                    url: "/settings/saveAll",
+                    data: {
+                        "ts": new Date().getTime()
+                    },
+                    dataType: "json",
+                    async: false,
+                    success: function (data) { done = data["done"]; }
+                });
+
+                if (done) {
+                    $(".ui-dialog").dialog("close");
+                    setTimeout(function () {
+                        alertify.confirm("Restart the service to take effect changes now, <br/> are you sure?", function(ok) {
+                            if (!ok) return;
+                            $.ajax({
+                                type: "GET",
+                                url: "/restart",
+                                data: {
+                                    "ts": new Date().getTime()
+                                }
+                            });
+                        });
+                    }, 500);
+                }
+
+            });
+        }
+
+        function showConnections() {
+            var connections = settings["connections"];
+            var lstConnections = $("#lstConnections");
+
+            lstConnections.empty();
+            for (var n=0 ; n<connections.length ; n++) {
+
+                // refresh listview
+                var portInfo = "";
+                if (connections[n]["vid"]>0) {
+                    portInfo += "VID: " + connections[n]["vid"] + " &nbsp; ";
+                }
+                if (connections[n]["pid"]>0) {
+                    portInfo += "PID: " + connections[n]["pid"] + " &nbsp; ";
+                }
+                if (connections[n]["port"]) {
+                    portInfo += connections[n]["port"];
+                }
+                portInfo += " [ " + connections[n]["baud"] + " bps ]";
+
+                var html =
+                        "<div class='ui-item-left'>" +
+                        "<input type='checkbox' data-role='flipswitch' id='chkEnableConnection" + n + "' " + (connections[n]["_disabled"] ? "" : "checked") + ">" +
+                        " &nbsp; &nbsp; " + portInfo +
+                        "</div><div class='ui-item-right'>" +
+                        "<span id='txtConnectionBubble" + n + "' class='ui-item-bubble'></span>" +
+                        "<a id='btnDeleteConnection" + n + "' class='ui-btn ui-shadow ui-corner-all ui-icon-delete ui-btn-icon-notext'>Delete</a>" +
+                        "</div>";
+                lstConnections
+                        .append("<li>" + html + "</li>")
+                        .find("input").flipswitch({ onText:"On", offText:"Off"});
+                lstConnections.listview("refresh");
+
+                var txtConnectionBubble = $("#txtConnectionBubble" + n);
+                txtConnectionBubble.text("0");
+                txtConnectionBubble.hide();
+
+                // add button callback
+                var btnDeleteConnection = $("#btnDeleteConnection" + n);
+                btnDeleteConnection.attr("_idx", n);
+                btnDeleteConnection.on("tap", function() {
+                    var idx = $(this).attr("_idx");
+                    alertify.confirm("Are you sure to delete this connection ?", function(ok) {
+                        if (!ok) return;
+                        connections.splice(idx, 1);
+                        if (updateConnectionsOnServer()) showConnections();
+                    });
+                });
+
+                var chkEnableConnection = $("#chkEnableConnection" + n);
+                chkEnableConnection.attr("_idx", n);
+                chkEnableConnection.on("change", function() {
+                    var idx = $(this).attr("_idx");
+                    var enabled = $(this).prop("checked");
+                    connections[idx]["_disabled"] = (enabled ? 0 : 1);
+                    updateConnectionsOnServer();
+                });
+            }
+        }
+
+        function showPorts() {
+            $.ajax({
+                type: "GET",
+                url: "/sysinfo/ports",
+                data: {
+                    "ts": new Date().getTime()
+                },
+                dataType: "json",
+                success: function (data) {
+                    ports = data;
+
+                    var selPortName = $("#selNewConnectionPortName");
+                    selPortName.append($("<option></option>"));
+                    for (var n=0 ; n<ports.length ; n++) {
+                        selPortName.append($("<option></option>")
+                            .text(ports[n]["port"])
+                            .attr("value", ports[n]["port"])
+                            .attr("_vid", ports[n]["vid"])
+                            .attr("_pid", ports[n]["pid"])
+                        );
+                    }
+                }
+            });
+        }
+
+        function addNewConnection() {
+
+            var isUSBSerial = false;
+            if ($("#optUSBSerial").prop("checked")) isUSBSerial = true;
+
+            var newConnection = {};
+            if(isUSBSerial) {
+                newConnection["vid"] = parseInt($("#txtNewConnectionVID").val());
+                newConnection["pid"] = parseInt($("#txtNewConnectionPID").val());
+            } else {
+                var port = $("#selNewConnectionPortName").children("option:selected").val();
+                newConnection["port"] = port;
+            }
+            var baud = parseInt($("#selNewConnectionBaudRate").children("option:selected").val());
+            newConnection["baud"] = baud;
+
+            if ((isUSBSerial && newConnection["vid"] > 0) || (!isUSBSerial && newConnection["port"] != "")) {
+
+                settings["connections"].push(newConnection);
+                if (updateConnectionsOnServer()) {
+                    $(".ui-dialog").dialog("close");
+                    showConnections();
+                }
+            }
+        }
+
+        function updateConnectionsOnServer() {
+
+            var done = false;
+            $.ajax({
+                type: "GET",
+                url: "/settings/write",
+                data: {
+                    "ts": new Date().getTime(),
+                    "key": "connections",
+                    "json": JSON.stringify(settings["connections"])
+                },
+                dataType: "json",
+                async: false,
+                success: function (data) { done = data["done"]; }
+            });
+
+            if (!done) return false;
+            done = false;
+
+            $.ajax({
+                type: "GET",
+                url: "/settings/saveAll",
+                data: {
+                    "ts": new Date().getTime()
+                },
+                dataType: "json",
+                async: false,
+                success: function (data) { done = data["done"]; }
+            });
+
+            return done;
+        }
+
+    </script>
+</head>
+<body>
+
+<div data-role="page" id="pageMain" data-theme="a" style="background-color: lightcyan;">
+
+    <div data-role="header" data-position="fixed" style="background-color: lightblue;">
+        <h1 id="txtTitle"></h1>
+        <!--
+        <a href="#pageSettings" class="ui-btn ui-btn-icon-notext ui-corner-all ui-icon-gear ui-nodisc-icon ui-alt-icon ui-btn-left" data-rel="dialog">Settings</a>
+        -->
+        <a href="#pageNewConnection" class="ui-btn ui-btn-icon-notext ui-corner-all ui-icon-plus ui-nodisc-icon ui-alt-icon ui-btn-right" data-rel="dialog">New Connection</a>
+    </div>
+
+    <div data-role="main" class="ui-content">
+        <ul id="lstConnections" data-role="listview" data-inset="true">
+        </ul>
+    </div>
+
+    <div data-role="footer" data-position="fixed" style="background-color: lightblue;">
+    <h1 id="txtStatus"></h1>
+    </div>
+
+    <div data-role="popup" id="divPopup" class="ui-content" style="background: lightyellow;">
+        <p id="txtPopup"></p>
+    </div>
+</div>
+
+<div data-role="page" id="pageSettings" data-theme="a">
+    <div data-role="header" style="background-color: lightblue;">
+        <h1>Settings</h1>
+    </div>
+
+    <div data-role="content">
+        <div class="ui-content">
+
+            <label for="txtWebsocketPort">Web Socket Service Port:</label>
+            <input type="text" id="txtWebsocketPort">
+
+            <label for="txtHttpPort">HTTP Service Port:</label>
+            <input type="text" id="txtHttpPort">
+
+            <div>&nbsp;</div>
+
+            <label for="barMessagingInterval">Messaging Interval (ms):</label>
+            <input type="range" id="barMessagingInterval" value="0" min="0" max="200" step="1">
+
+            <div>&nbsp;</div>
+
+            <label for="chkLoggerEnabled">Show Logs in Console</label>
+            <input type="checkbox" id="chkLoggerEnabled">
+
+            <div>&nbsp;</div>
+
+            <a id="btnSaveSettings"  data-role="button" data-inline="true">Save Settings</a>
+            <a id="btnResetSettings" data-role="button" data-inline="true">Defaults</a>
+            <a data-role="button" data-inline="true" data-rel="back">Cancel</a>
+
+        </div>
+    </div>
+</div>
+
+<div data-role="page" id="pageNewConnection" data-theme="a">
+    <div data-role="header" style="background-color: lightblue;">
+        <h1>New Connection</h1>
+    </div>
+
+    <div data-role="content">
+        <div class="ui-content">
+            <p>Add a new connection profile that will enable communications with the matched devices as you specified below:</p>
+
+            <label for="optGeneralSerial">Matching with the specific serial port name :</label>
+            <input type="radio" name="grpSerial" id="optGeneralSerial" checked>
+
+            <div class="ui-field-contain">
+                <label for="selNewConnectionPortName">Port Name:</label>
+                <select id="selNewConnectionPortName"></select>
+            </div>
+
+            <label for="optUSBSerial">Matching with the specific USB VID / PID :</label>
+            <input type="radio" name="grpSerial" id="optUSBSerial">
+
+            <div class="ui-field-contain">
+                <label for="txtNewConnectionVID">Vendor ID:</label>
+                <input type="text" id="txtNewConnectionVID">
+                <div>&nbsp;</div>
+                <label for="txtNewConnectionPID">Product ID:</label>
+                <input type="text" id="txtNewConnectionPID">
+            </div>
+
+            <div class="ui-field-contain">
+                <label for="selNewConnectionBaudRate">Baud Rate:</label>
+                <select id="selNewConnectionBaudRate">
+                    <option value="4800">4800</option>
+                    <option value="9600">9600</option>
+                    <option value="57600">57600</option>
+                    <option value="115200" selected>115200</option>
+                </select>
+            </div>
+
+            <a id="btnAddNewConnection" data-role="button" data-inline="true">Add</a>
+            <a data-role="button" data-inline="true" data-rel="back">Cancel</a>
+        </div>
+    </div>
+</div>
+
+
+</body>
+</html>
