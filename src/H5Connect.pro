@@ -31,13 +31,17 @@ HEADERS  += \
     h5connect_settings_form.h
 
 
-install_extra.path = $$OUT_PWD
-install_extra.files += $$PWD/settings.json
-
-INSTALLS += install_extra
-
 RESOURCES += \
     h5connect.qrc
 
 FORMS += \
     h5connect_settings_form.ui
+
+install_extra.path = $$OUT_PWD
+install_extra.files += $$PWD/settings.json
+install_extra.files += $$PWD/web
+
+
+INSTALLS += install_extra
+
+QMAKE_BUNDLE_DATA += install_extra
