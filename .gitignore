@@ -2,6 +2,7 @@
 *.iml 
 build/
 build*
+src/H5Connect.pro.user
 # System Files
 .DS_Store
 Thumbs.db
